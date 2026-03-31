@@ -82,14 +82,14 @@ mvn spring-boot:run "-Dspring-boot.run.profiles=emulator" \
 
 ## Development Journey
 
-This project was built entirely through a spec-driven workflow using **SpecKit v0.4.3** running inside **VS Code** with **GitHub Copilot** (Claude) as the coding agent. The process went from natural-language description to a fully tested, running application in a single session. Below is a detailed account of each phase, the tools involved, and the troubleshooting required along the way.
+This project was built entirely through a spec-driven workflow using **SpecKit v0.4.3** running inside **VS Code** with **GitHub Copilot Chat** (Claude Opus 4.6) as the coding agent. The process went from natural-language description to a fully tested, running application in a single session. Below is a detailed account of each phase, the tools involved, and the troubleshooting required along the way.
 
 ### Tooling Used
 
 | Tool | Role |
 |------|------|
 | **SpecKit v0.4.3** | Spec-driven development framework — structured prompts for specify, plan, tasks, analyze, and implement workflows |
-| **GitHub Copilot (Claude)** | AI coding agent — drove every phase from spec authoring to implementation and runtime debugging |
+| **GitHub Copilot Chat (Claude Opus 4.6)** | AI coding agent — drove every phase from spec authoring to implementation and runtime debugging |
 | **Azure Cosmos DB Best Practices Skill** (`cosmosdb-best-practices`) | Copilot skill that provided partition key strategy, indexing policy, SDK usage rules, and container design guidance |
 | **Azure Cosmos DB Emulator** (Windows) | Local Cosmos DB instance for runtime and integration testing |
 | **Maven 3.9.6** | Build tooling for the Spring Boot project |
@@ -99,7 +99,7 @@ This project was built entirely through a spec-driven workflow using **SpecKit v
 
 **Input prompt**: *"Build an API for a mobile game's leaderboard system. The system needs to handle real-time score updates, display global and regional leaderboards, and support player profile queries."*
 
-Copilot produced a complete feature specification with:
+Copilot Chat produced a complete feature specification with:
 - **4 user stories** (P1–P4) prioritized by dependency: score submission → global leaderboard → regional leaderboard → player profile
 - **14 functional requirements** (FR-001 through FR-014), each testable and unambiguous
 - **7 success criteria** with measurable thresholds (2s submission latency, 10K concurrent writes, sub-second queries)
@@ -114,7 +114,7 @@ A quality checklist (`checklists/requirements.md`) was generated and passed 16/1
 
 **Input**: The spec plus a directive to use Spring Boot 3, Azure Cosmos DB NoSQL API, and Java 17+.
 
-Before writing the plan, Copilot loaded the **`cosmosdb-best-practices` skill** (~2,800 lines of Cosmos DB rules covering partitioning, indexing, SDK patterns, throughput, and query optimization). This skill directly influenced:
+Before writing the plan, Copilot Chat loaded the **`cosmosdb-best-practices` skill** (~2,800 lines of Cosmos DB rules covering partitioning, indexing, SDK patterns, throughput, and query optimization). This skill directly influenced:
 
 - **Partition key strategy**: Hierarchical partition keys (`/periodId` → `/region`) on the `leaderboard-entries` container, chosen to enable single-partition regional queries and bounded-fan-out global queries. The skill's `partition-hierarchical`, `partition-query-patterns`, and `partition-avoid-hotspots` rules were applied.
 - **Multi-container design**: Three containers separated by access pattern (high-read leaderboard entries, high-write score log, low-latency player profiles). Guided by `model-denormalize-reads` and `throughput-container-vs-database` rules.

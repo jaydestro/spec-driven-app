@@ -1,15 +1,19 @@
-# I Built a Production-Ready API in One Session Using Spec-Driven Development with AI
+# How a Spec-Driven Workflow and the Cosmos DB Agent Kit Steered an AI Agent to Build a Production-Ready API
 
-I gave an AI agent a single sentence — *"Build an API for a mobile game's leaderboard system"* — and walked away with a fully implemented Spring Boot API backed by Azure Cosmos DB, 38 passing tests, and a running application verified against real API calls. No boilerplate templates. No copy-pasting from Stack Overflow. No half-finished TODO comments left in the code.
+I gave an AI agent a single sentence — *"Build an API for a mobile game's leaderboard system"* — and walked away with a fully implemented Spring Boot API backed by Azure Cosmos DB, 38 passing tests, and a running application verified against real API calls.
 
-But here's the thing: the AI didn't just start writing code. It wrote a spec first. Then a plan. Then it analyzed its own work for contradictions, found 19 of them across two rounds, fixed every one, and *then* started coding. The tests were designed during planning, before a single line of Java existed.
+But the interesting part isn't that the AI wrote code. Any AI agent can generate code. The interesting part is what happened *before* it wrote code — and specifically, how the **Azure Cosmos DB Agent Kit** turned what would have been a generic, probably-wrong database design into a properly partitioned, correctly indexed, rule-referenced architecture that worked on the first try.
 
-This is what spec-driven development looks like when you pair it with the right tooling.
+Here's the problem with asking an AI to "build a leaderboard API with Cosmos DB." Without guardrails, the agent will pick a partition key that makes writes easy but queries expensive. It'll put everything in one container. It'll use the default indexing policy and wonder why queries cost 50 RU when they should cost 5. It'll use `@PostConstruct` for initialization because that's what most blog posts show. The code will compile. The tests will pass against mocks. And the moment you point it at a real database with real data volumes, the design falls apart.
+
+That's the gap this workflow filled. **SpecKit** gave the agent a structured process — spec, plan, analyze, implement. The **Cosmos DB best-practices skill** from the agent kit gave it 2,800 lines of domain-specific rules to follow during planning. And the combination meant the agent didn't just produce code that works — it produced a Cosmos DB design where every decision traces to a specific rule ID, not to whatever the model's training data happened to reinforce.
+
+This is what spec-driven development looks like when you pair it with domain-specific tooling.
 
 ## The Stack
 
 - **SpecKit v0.4.3** — A spec-driven development framework that runs inside VS Code. It provides structured prompts for each phase: `/speckit.specify`, `/speckit.plan`, `/speckit.tasks`, `/speckit.analyze`, and `/speckit.implement`. Each prompt enforces a specific output format and quality gate before the next phase can begin.
-- **GitHub Copilot (Claude)** — The AI coding agent driving every phase. Not just autocomplete — this is an agentic workflow where Copilot reads files, makes decisions, writes code, runs builds, and debugs failures.
+- **GitHub Copilot Chat (Claude Opus 4.6)** — The AI coding agent driving every phase. Not just autocomplete — this is an agentic workflow where Copilot Chat reads files, makes decisions, writes code, runs builds, and debugs failures.
 - **Azure Cosmos DB Best Practices Skill** — A Copilot skill containing ~2,800 lines of Cosmos DB-specific rules covering partitioning, indexing, SDK patterns, throughput, and query optimization. Each rule has an ID (like `partition-hierarchical` or `index-composite`) so you can trace exactly which rule influenced which decision.
 - **Azure Cosmos DB Emulator** — The Windows emulator running locally for both development and integration testing.
 
@@ -64,42 +68,71 @@ I added testing requirements directly to the spec at three levels:
 
 These requirements went into the spec before any code existed. When the tasks were generated later, every user story phase included test tasks that traced back to these requirements.
 
-## Phase 2: Planning — Where the Cosmos DB Skill Earned Its Keep
+## Phase 2: Planning — Where the Agent Kit Changed Everything
 
-I ran `/speckit.plan` and gave it a technology directive: Spring Boot 3, Azure Cosmos DB NoSQL API, Java 17+.
+This is the phase that made the biggest difference. I ran `/speckit.plan` and gave it a technology directive: Spring Boot 3, Azure Cosmos DB NoSQL API, Java 17+.
 
-Before writing a single line of the plan, Copilot loaded the **Cosmos DB best-practices skill**. This isn't a generic "here are some tips" document. It's approximately 2,800 lines of structured rules, each with an ID, and each covering a specific aspect of Cosmos DB design. The agent cited specific rules in every decision it made.
+Before writing a single line of the plan, Copilot Chat loaded the **Cosmos DB best-practices skill** from the [Azure Cosmos DB Agent Kit](https://github.com/AzureCosmosDB/cosmosdb-agent-kit). This isn't a generic "here are some tips" document. It's approximately 2,800 lines of structured rules, each with an ID, and each covering a specific aspect of Cosmos DB design. The agent cited specific rules in every decision it made.
 
-### Partition Key Strategy
+**This is the part that matters most in this entire post.** Without the agent kit, the AI would have generated a plan based on its general training data — which is a mix of good practices, outdated blog posts, and Stack Overflow answers of varying quality. With the agent kit, the AI had a curated, opinionated set of rules written by the Cosmos DB team. The difference is the difference between "this might work" and "this is how it should be done."
 
-The dominant queries are "show me the global top 100 this week" and "show me the top 100 in Germany this week." The skill's `partition-hierarchical` and `partition-query-patterns` rules guided the decision to use a hierarchical partition key on the `leaderboard-entries` container: `/periodId` as level 1, `/region` as level 2.
+Let me walk through the specific decisions the agent kit steered.
 
-This means:
-- Regional leaderboard = single-partition query (fast, cheap)
-- Global leaderboard = prefix query on `periodId` alone, scanning all regions within that week (bounded fan-out across ~200 country partitions, not unbounded)
-- Historical queries = just change the `periodId` value
+### Partition Key Strategy — The Decision That Shapes Everything
 
-The alternatives were considered and rejected with citations. Single key on `/playerId`? Efficient for profile lookups but forces cross-partition scans for every leaderboard query — and leaderboard reads vastly outnumber profile lookups. That's `partition-query-patterns` saying no.
+In Cosmos DB, your partition key choice determines your query performance, your throughput distribution, and your cost. Get it wrong and you're redesigning your data model. Get it right and everything else follows.
 
-### Container Design
+The dominant queries for a leaderboard are "show me the global top 100 this week" and "show me the top 100 in Germany this week." Without the agent kit, an AI would likely pick `/playerId` as the partition key — it's the obvious primary identifier, and most Cosmos DB tutorials use the entity's natural key. But that choice means every leaderboard query is a cross-partition fan-out across potentially millions of partitions. At scale, that's slow and expensive.
 
-Three containers, separated by access pattern:
+The skill's `partition-hierarchical` and `partition-query-patterns` rules steered the agent to a hierarchical partition key on the `leaderboard-entries` container: `/periodId` as level 1, `/region` as level 2. This changes everything:
 
-| Container | Partition Key | Access Pattern |
-|-----------|--------------|----------------|
-| `leaderboard-entries` | `/periodId`, `/region` | Very high read volume (leaderboard queries) |
-| `scores` | `/playerId` | High write volume (~1M/day), append-only |
-| `players` | `/playerId` | Low-latency point reads (player profiles) |
+- **Regional leaderboard** = single-partition query. One physical partition, one round trip. Fast and cheap.
+- **Global leaderboard** = prefix query on `periodId` alone. The query fans out across all region partitions within that week — roughly 200 countries — but that's bounded fan-out, not unbounded. The data for last week is in completely separate partitions that aren't touched.
+- **Historical queries** = just change the `periodId`. Old leaderboard periods naturally land in isolation without any cleanup jobs or TTL management.
 
-The skill's `model-denormalize-reads` rule justified the denormalized design — pre-computed aggregates on the player document, a separate materialized leaderboard entry per player per period. The `throughput-container-vs-database` rule justified separate containers so throughput can be scaled independently.
+The agent documented the alternatives it considered and why they were rejected, citing specific rules:
 
-### Indexing
+> Single key on `/playerId`? Efficient for profile lookups but forces cross-partition scans for every leaderboard query — and leaderboard reads vastly outnumber profile lookups. That's `partition-query-patterns` saying no.
 
-A composite index on `(bestScore DESC, scoreTimestamp ASC)` on `leaderboard-entries` — because the spec requires earlier submissions to rank higher when scores are tied. The `index-composite` and `index-composite-direction` rules from the skill drove this. Non-queried fields like `displayName` are excluded from indexing per `index-exclude-unused`.
+> Synthetic key `/periodId_region`? Works but loses the hierarchical prefix query benefit. Requires exact match on both.
 
-### SDK Configuration
+This wasn't the agent winging it. This was the agent applying a decision framework from the skill, considering the access patterns from the spec, and arriving at the right answer with justification. That's what domain-specific rules buy you.
 
-Gateway connection mode for the emulator (per `sdk-emulator-ssl`), Session consistency for read-your-writes guarantees (per `sdk-prefer-session-consistency`), `contentResponseOnWriteEnabled(true)` to get the document back after writes without a separate read (per `sdk-java-content-response`). The configuration class is named `CosmosDbConfig`, not `CosmosConfig` (per `sdk-java-cosmos-config`). Container setup uses `@Bean` dependency chains, never `@PostConstruct` (same rule).
+### Multi-Container Design — Separating by Access Pattern
+
+Without guidance, an AI agent would likely put all document types in a single container with a type discriminator. It's simpler. But the skill's `model-denormalize-reads` and `throughput-container-vs-database` rules pushed toward three separate containers:
+
+| Container | Partition Key | Why It's Separate |
+|-----------|--------------|-------------------|
+| `leaderboard-entries` | `/periodId`, `/region` | Very high read volume. Optimized for leaderboard queries. Throughput scaled for reads. |
+| `scores` | `/playerId` | High write volume (~1M/day). Append-only log. Throughput scaled for writes. |
+| `players` | `/playerId` | Low-latency point reads only. Small documents. 1 RU per read. |
+
+The key insight from the skill: when access patterns diverge significantly, separate containers let you scale throughput independently. The leaderboard container needs read throughput. The scores container needs write throughput. Putting them together means paying for the maximum of both on every operation.
+
+The agent also applied the `model-denormalize-reads` rule — instead of normalizing data and joining at query time (which Cosmos DB doesn't support efficiently), the design pre-computes aggregates. The player document stores `totalGamesPlayed`, `averageScore`, and `bestScore` directly. The leaderboard entry duplicates the player's `displayName` and `region`. More storage, but leaderboard queries never touch the players container.
+
+### Composite Indexes — Tiebreaker Ordering
+
+The spec requires that when two players have the same score, the one who submitted earlier ranks higher. In Cosmos DB, this means a composite index: `(bestScore DESC, scoreTimestamp ASC)`.
+
+The skill's `index-composite` and `index-composite-direction` rules didn't just say "use a composite index." They specified that the sort directions matter — the direction in the index must match the direction in the ORDER BY clause. DESC for score (highest first), ASC for timestamp (earliest first). Get the direction wrong and Cosmos DB ignores the index and does a full scan.
+
+The `index-exclude-unused` rule also prompted the agent to explicitly exclude non-queried fields from the index. `displayName` is returned in responses but never filtered or sorted on — so it's excluded, reducing write RU cost on every score submission.
+
+### SDK Configuration — The Stuff That Doesn't Show Up in Tutorials
+
+This is where the agent kit's value is most subtle. These aren't architecture decisions — they're configuration choices that tutorials skip but production deployments need:
+
+- **Gateway connection mode for the emulator** (rule `sdk-emulator-ssl`). Direct mode is faster in production, but the emulator doesn't support it reliably. Without this rule, the agent would have used Direct mode, and the first runtime error would have been confusing.
+- **Session consistency** (rule `sdk-prefer-session-consistency`). The default for most tutorials is "Eventual," but the agent kit says to use Session for read-your-writes guarantees. When a player submits a score and immediately views the leaderboard, they need to see their own submission. Session consistency guarantees that.
+- **`contentResponseOnWriteEnabled(true)`** (rule `sdk-java-content-response`). This returns the document in the write response so you don't need a separate read after each write. Saves 1 RU per write operation.
+- **Config class named `CosmosDbConfig`, not `CosmosConfig`** (rule `sdk-java-cosmos-config`). This avoids a name collision with an internal Spring class. A subtle gotcha that would cause hard-to-diagnose startup failures.
+- **`@Bean` dependency chains, never `@PostConstruct`** (same rule). Spring lifecycle ordering with `@PostConstruct` is unreliable for Cosmos DB initialization. The skill explicitly says to use `@Bean` methods so Spring manages the dependency graph.
+
+None of these would appear in a generic AI-generated plan. Each one would have become a runtime bug discovered during testing. The agent kit front-loaded them into the planning phase.
+
+### What the Plan Produced
 
 Every decision in the plan traces to a specific rule ID. This isn't "the AI thought it was a good idea." This is "rule `partition-hierarchical` says to use hierarchical partition keys when your queries have a natural prefix hierarchy, and our leaderboard queries do."
 
@@ -238,12 +271,16 @@ Every response matched the API contracts from the planning phase.
 
 ## The Takeaway
 
-The value of spec-driven development with AI isn't that it writes code faster. It's that it **resolves contradictions before they become bugs.** Nineteen findings caught during analysis. Four minor fixes during build. Two runtime issues from emulator-specific behavior. Zero logic bugs.
+The value of spec-driven development with AI isn't that it writes code faster. It's that it **makes the right decisions in the planning phase, before any code exists.**
 
-The tests weren't an afterthought — they were requirements. The partition key strategy wasn't a guess — it was a rule-referenced decision. The API contracts weren't aspirational — they were verified against live responses.
+The Cosmos DB Agent Kit is the proof. Without it, the agent would have produced a working API — it would have compiled, passed basic tests, and returned JSON. But the partition key would have been wrong, the container design would have been naive, the indexing policy would have been default, and the SDK configuration would have been cargo-culted from a tutorial. You'd discover all of this in production, under load, when it's expensive to fix.
 
-If you're building with AI agents, give them structure. Give them specs. Give them analysis passes. The code will be better, and you'll spend your debugging time on SSL certificates instead of business logic.
+With the agent kit loaded, every database design decision in the plan traces to a specific rule ID. The partition key strategy references `partition-hierarchical` and `partition-query-patterns`. The container separation cites `throughput-container-vs-database`. The composite index directions follow `index-composite-direction`. The SDK configuration applies `sdk-java-cosmos-config` and `sdk-prefer-session-consistency`. These aren't suggestions the agent might follow — they're constraints that shaped every artifact downstream.
+
+The spec-driven workflow amplified this further. SpecKit's analysis passes caught 19 inconsistencies between the spec, the plan, and the task list before a single line of Java was written. The agent kit ensured the database design was right. The spec framework ensured everything else was consistent with that design. Together, they produced 50 tasks, 38 passing tests, and 5 verified API endpoints with zero logic bugs.
+
+If you're building with AI agents, don't just give them a prompt and hope for the best. Give them domain-specific rules so they make the right architectural decisions. Give them a spec framework so those decisions propagate consistently through the entire codebase. The code will be better, and you'll spend your debugging time on SSL certificates instead of partition key redesigns.
 
 ---
 
-*Built with [SpecKit](https://github.com/speckit), [GitHub Copilot](https://github.com/features/copilot), and the [Azure Cosmos DB Best Practices Skill](https://github.com/AzureCosmosDB/cosmosdb-agent-kit). The complete spec artifacts, source code, and test suite are in the `specs/001-game-leaderboard-api/` directory.*
+*Built with [SpecKit](https://github.com/speckit), [GitHub Copilot Chat](https://github.com/features/copilot) (Claude Opus 4.6), and the [Azure Cosmos DB Best Practices Skill](https://github.com/AzureCosmosDB/cosmosdb-agent-kit). The complete spec artifacts, source code, and test suite are in the `specs/001-game-leaderboard-api/` and `apps/001-game-leaderboard/` directories.*
